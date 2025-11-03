@@ -17,7 +17,7 @@
         import { getAuth, onAuthStateChanged, signOut, signInWithEmailAndPassword, createUserWithEmailAndPassword, updateProfile } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
         import { getFirestore, doc, addDoc, onSnapshot, collection, query, serverTimestamp, getDocs, setDoc, deleteDoc, updateDoc } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
         
-        // These are exposed globally for the React script block below
+        // Expose Firebase dependencies globally for the React script block
         window.firebaseDependencies = {
             initializeApp, getAuth, onAuthStateChanged, signOut, signInWithEmailAndPassword, 
             createUserWithEmailAndPassword, updateProfile, getFirestore, doc, addDoc, 
@@ -58,6 +58,7 @@
         } = window.firebaseDependencies;
 
         // --- Environment Variables (Your Config) ---
+        // NOTE: The Firebase configuration below must be replaced with your actual values if you want to deploy it to a new Firebase project.
         const appId = 'cutechat-f515a'; 
         const firebaseConfig = {
           apiKey: "AIzaSyAfIpg0xMFsghQZth0VN3bS479dBsQEywo",
@@ -95,7 +96,7 @@
           const currentUserRole = userRoles[user?.uid] || { role: 'user', isBanned: false };
           const isOwner = currentUserRole.role === 'owner';
           const isMod = currentUserRole.role === 'mod' || isOwner;
-          const isBanned = currentUserRole.isBanned;
+          const isBanned = currentUserRole.isBanned; // <-- Available via closure to ChatContent
 
           // Chat/Navigation State
           const [activeTab, setActiveTab] = useState('public'); 
@@ -392,6 +393,9 @@
             const [newMessageText, setNewMessageText] = useState('');
             const [chatLoading, setChatLoading] = useState(true);
             const chatMessagesRef = useRef(null);
+            
+            // Accessing isBanned from the parent App component's closure
+            const isSenderBanned = isBanned; 
 
             // Determines the Firestore collection path
             const chatPath = useMemo(() => {
@@ -413,6 +417,8 @@
 
                 const messagesCollectionRef = collection(db, chatPath);
                 const q = query(messagesCollectionRef);
+
+                setChatLoading(true);
 
                 const unsubscribe = onSnapshot(q, (snapshot) => {
                     const fetchedMessages = [];
@@ -441,25 +447,30 @@
                 }
             }, [messages]);
 
-            // Send Message Handler
+            // Send Message Handler (FIXED/VERIFIED)
             const handleSendMessage = useCallback(async () => {
-                if (!db || !user || newMessageText.trim() === '' || isBanned) return;
+                const messageText = newMessageText.trim();
+                
+                if (!db || !user || messageText === '' || isSenderBanned) {
+                    console.warn("Attempted to send empty/banned message. Aborting.");
+                    return; 
+                }
 
                 try {
                     const messagesCollectionRef = collection(db, chatPath);
 
                     await addDoc(messagesCollectionRef, {
-                        text: newMessageText.trim(),
+                        text: messageText,
                         uid: user.uid,
                         username: user.displayName || user.email,
                         createdAt: serverTimestamp(),
                     });
-                    setNewMessageText('');
+                    setNewMessageText(''); // Clear the input on successful send
                 } catch (e) {
                     console.error("Error sending message: ", e);
                     setDataError("Failed to send message.");
                 }
-            }, [db, user, newMessageText, chatPath, isBanned]);
+            }, [db, user, newMessageText, chatPath, isSenderBanned]);
 
             const deleteMessage = useCallback(async (messageId) => {
                 if (!db || !isMod) return; 
@@ -485,6 +496,7 @@
             const MessageItem = ({ message }) => {
                 const sender = userRoles[message.uid] || { username: message.username, role: 'user', isBanned: false };
                 const isCurrentUser = user && user.uid === message.uid;
+                // Safely format timestamp
                 const time = message.createdAt?.toDate ? message.createdAt.toDate().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : '...';
 
                 return (
@@ -506,7 +518,7 @@
                                 <p className="text-base break-words whitespace-pre-wrap">{message.text}</p>
                             </div>
                             
-                            {/* Delete button (Owner/Mod only in public chat) */}
+                            {/* Delete button (Owner/Mod only in public chat, Sender only in private chat) */}
                             {(isMod && chatType === 'public') || (isCurrentUser && chatType === 'private') ? (
                                 <button 
                                     onClick={() => deleteMessage(message.id)}
@@ -549,9 +561,9 @@
                         )}
                     </main>
 
-                    {/* Message Input */}
+                    {/* Message Input (FIXED: Ensure handleSendMessage is triggered) */}
                     <div className="p-4 bg-white dark:bg-gray-800 border-t border-gray-200 dark:border-gray-700 sticky bottom-0 z-10 shadow-t-lg">
-                        {isBanned ? (
+                        {isSenderBanned ? (
                             <div className="p-3 text-center bg-red-100 text-red-700 rounded-xl font-semibold dark:bg-red-900/50 dark:text-red-300">
                                 You have been banned from sending messages.
                             </div>
@@ -561,7 +573,12 @@
                                     type="text"
                                     value={newMessageText}
                                     onChange={(e) => setNewMessageText(e.target.value)}
-                                    onKeyPress={(e) => e.key === 'Enter' && handleSendMessage()}
+                                    onKeyPress={(e) => {
+                                        if (e.key === 'Enter') {
+                                            e.preventDefault(); // Prevent default form submission behavior
+                                            handleSendMessage();
+                                        }
+                                    }}
                                     placeholder="Type your message..."
                                     className="flex-1 p-3 rounded-xl border-2 border-gray-300 focus:border-indigo-500 dark:border-gray-700 dark:bg-gray-700 dark:text-white transition duration-200"
                                     aria-label="New message input"
